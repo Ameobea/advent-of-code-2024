@@ -3,4 +3,21 @@ name = "aoc-2024"
 version = "0.1.0"
 edition = "2021"
 
+[profile.release]
+lto = true
+codegen-units = 1
+target-cpu = "native"
+
+[lib]
+crate-type = ["rlib"]
+
+[[bench]]
+name = "day3"
+harness = false
+
+[dev-dependencies]
+criterion = "0.5.1"
+
 [dependencies]
+# packed_simd = "0.3.9"
+smallvec = "1.13.2"
