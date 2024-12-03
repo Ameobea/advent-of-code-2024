@@ -2,7 +2,7 @@
 
 use std::{
   fmt::Display,
-  simd::{cmp::SimdPartialEq, u8x32},
+  simd::{cmp::SimdPartialEq, u8x32, u8x64},
 };
 
 pub const INPUT: &'static [u8] = include_bytes!("../inputs/day3.txt");
@@ -36,10 +36,35 @@ pub fn parse_and_compute<const ENABLE_DO_STATE: bool>(input: &[u8]) -> usize {
   loop {
     let mut c;
 
-    if char_ix < input.len() - (32 + 1) {
+    // For part 2, when the "do" mode is set to "don't", we only care about finding `d` characters.
+    //
+    // Since d's are so much sparser in the inputs than m's, there's a decent chance it will be more
+    // than 32 chars ahead and the overhead of reading further tends to be worth it.
+    if ENABLE_DO_STATE && !do_state && char_ix < input.len() - (64 + 1) {
+      let vector =
+        unsafe { u8x64::from_slice(std::slice::from_raw_parts(input.as_ptr().add(char_ix), 64)) };
+
+      let mask = vector.simd_eq(u8x64::splat('d' as u8));
+      let hit_ix = match mask.first_set() {
+        Some(hit_ix) => hit_ix,
+        None => {
+          // no hit in the entire window; skip it completely and move on to the next
+          char_ix += 64;
+          continue;
+        },
+      };
+
+      char_ix += hit_ix;
+      c = unsafe { *input.get_unchecked(char_ix) };
+    }
+    // Try to find the first relavant start character in the input by checking 32 at a time and then
+    // selecting the index of the first match
+    else if char_ix < input.len() - (32 + 1) {
       let vector =
         unsafe { u8x32::from_slice(std::slice::from_raw_parts(input.as_ptr().add(char_ix), 32)) };
 
+      // Same as before, if we're keeping track of do/don't state and the do flag is not set, we can
+      // avoid checking for `m` characters entirely and just scan for the next `d`.
       let combined_mask = if ENABLE_DO_STATE {
         let d_mask = vector.simd_eq(u8x32::splat('d' as u8));
         if !do_state {
@@ -54,6 +79,7 @@ pub fn parse_and_compute<const ENABLE_DO_STATE: bool>(input: &[u8]) -> usize {
       let hit_ix = match combined_mask.first_set() {
         Some(hit_ix) => hit_ix,
         None => {
+          // no hit in the entire window; skip it completely and move on to the next
           char_ix += 32;
           continue;
         },
@@ -65,7 +91,9 @@ pub fn parse_and_compute<const ENABLE_DO_STATE: bool>(input: &[u8]) -> usize {
       } else {
         'm' as u8
       };
-    } else {
+    }
+    // We use char-by-char checks for the remainder of the window
+    else {
       c = unsafe { *input.get_unchecked(char_ix) };
       while c != 'm' as u8 && (!ENABLE_DO_STATE || c != 'd' as u8) {
         char_ix += 1;
@@ -89,6 +117,7 @@ pub fn parse_and_compute<const ENABLE_DO_STATE: bool>(input: &[u8]) -> usize {
 
         // try to fastpath consume nums
         let mut first_num = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+        let mut num_ix = 0usize;
         let mut cur: [usize; 3] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
         let mut digit_ix = 0usize;
 
@@ -99,13 +128,22 @@ pub fn parse_and_compute<const ENABLE_DO_STATE: bool>(input: &[u8]) -> usize {
             }
             digit_ix += 1;
           } else if c == ',' as u8 {
-            if digit_ix == 0 {
+            if digit_ix == 0 || num_ix != 0 {
+              char_ix += 1;
+              if char_ix >= input.len() {
+                return sum;
+              }
               break 'consume_nums;
             }
             first_num = add_num(unsafe { cur.get_unchecked(..digit_ix) });
+            num_ix += 1;
             digit_ix = 0;
           } else if c == ')' as u8 {
-            if digit_ix == 0 {
+            if digit_ix == 0 || num_ix != 1 {
+              char_ix += 1;
+              if char_ix >= input.len() {
+                return sum;
+              }
               break 'consume_nums;
             } else {
               let num = add_num(unsafe { cur.get_unchecked(..digit_ix) });
@@ -162,4 +200,4 @@ pub fn solve() {
   println!("Part 2: {out}");
 }
 
-pub fn run(input: &[u8]) -> impl Display { parse_and_compute::<false>(input) }
+pub fn run(input: &[u8]) -> impl Display { parse_and_compute::<true>(input) }
