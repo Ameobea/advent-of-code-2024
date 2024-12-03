@@ -7,7 +7,7 @@ fn day3_bench(c: &mut Criterion) {
   group.measurement_time(Duration::new(10, 0));
 
   group.bench_function("part2", |b| {
-    b.iter(|| aoc_2024::day3::parse_and_compute::<true>())
+    b.iter(|| aoc_2024::day3::parse_and_compute::<true>(aoc_2024::day3::INPUT))
   });
 
   group.finish();
