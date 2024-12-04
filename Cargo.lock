@@ -28,6 +28,7 @@ name = "aoc-2024"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "regex",
  "smallvec",
 ]
 
