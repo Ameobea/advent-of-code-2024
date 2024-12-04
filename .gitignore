@@ -1,3 +1,4 @@
 /target
 inputs
 !inputs/.gitkeep
+.DS_Store
