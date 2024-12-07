@@ -8,17 +8,34 @@ lto = true
 codegen-units = 1
 target-cpu = "native"
 
+[profile.bench]
+lto = true
+codegen-units = 1
+target-cpu = "native"
+debug = true
+
 [lib]
 crate-type = ["rlib"]
 
 [[bench]]
-name = "day3"
+name = "bench_main"
 harness = false
+
+[features]
+local = []
+default = ["local"]
 
 [dev-dependencies]
 criterion = "0.5.1"
 
 [dependencies]
+bitvec = "1.0.1"
+cached = { version = "0.54.0", features = ["proc_macro"] }
+fxhash = "0.2.1"
+itertools = "0.13.0"
+pathfinding = "4.11.0"
+rayon = "1.10.0"
 regex = "1.11.1"
-# packed_simd = "0.3.9"
 smallvec = "1.13.2"
+topo_sort = "0.4.0"
+topological-sort = "0.2.2"

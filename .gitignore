@@ -2,3 +2,4 @@
 inputs
 !inputs/.gitkeep
 .DS_Store
+perf.data*

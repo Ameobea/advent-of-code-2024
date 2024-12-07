@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, Criterion};
 
 fn day3_bench(c: &mut Criterion) {
   let mut group = c.benchmark_group("day3");
@@ -17,4 +17,3 @@ fn day3_bench(c: &mut Criterion) {
 }
 
 criterion_group!(benches, day3_bench);
-criterion_main!(benches);
