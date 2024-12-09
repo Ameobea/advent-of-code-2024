@@ -3,10 +3,10 @@
 #[cfg(feature = "local")]
 pub const INPUT: &'static str = include_str!("../inputs/day7.txt");
 
-use std::{fmt::Display, sync::Arc};
+use std::fmt::Display;
 
 use itertools::{repeat_n, Itertools};
-use rayon::iter::{IntoParallelRefIterator, ParallelBridge, ParallelIterator};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 fn parse_input(input: &str) -> Vec<(usize, Vec<usize>)> {
   input
@@ -175,26 +175,40 @@ pub fn part1(input: &str) -> impl Display {
     .sum::<usize>()
 }
 
-#[cached::proc_macro::cached]
-fn get_permuted_ops(arg_count: usize) -> Arc<Vec<Vec<Op>>> {
-  Arc::new(
-    repeat_n([Op::Add, Op::Mul, Op::Concat], arg_count - 1)
-      .multi_cartesian_product()
-      .collect(),
-  )
+const MAX_ARG_COUNT: usize = 13;
+static mut PERMUTED_OPS_CACHE: [*const Vec<Op>; MAX_ARG_COUNT] = [std::ptr::null(); MAX_ARG_COUNT];
+
+fn compute_permuted_ops(arg_count: usize) -> Vec<Op> {
+  repeat_n([Op::Add, Op::Mul, Op::Concat], arg_count - 1)
+    .multi_cartesian_product()
+    .flatten()
+    .collect()
+}
+
+fn init_permuted_ops() {
+  for i in 3..MAX_ARG_COUNT {
+    let ops = compute_permuted_ops(i);
+    unsafe { PERMUTED_OPS_CACHE[i] = Box::into_raw(Box::new(ops)) };
+  }
+}
+
+fn get_permuted_ops(arg_count: usize) -> &'static [Op] {
+  unsafe { (*PERMUTED_OPS_CACHE[arg_count]).as_slice() }
 }
 
 pub fn part2(input: &str) -> impl Display {
+  init_permuted_ops();
+
   let input = parse_input(input);
 
   input
     .par_iter()
     .filter(|(res, args)| {
       let ops = get_permuted_ops(args.len());
-      ops
-        .iter()
+      let chunk_size = args.len() - 1;
+      ops.chunks_exact(chunk_size)
         // .par_bridge()
-        .any(|ops| calc_arb(args, &ops, *res) == *res)
+        .any(|ops| calc_arb(args, ops, *res) == *res)
     })
     .map(|(val, _args)| *val)
     .sum::<usize>()
