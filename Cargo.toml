@@ -6,12 +6,10 @@ edition = "2021"
 [profile.release]
 lto = true
 codegen-units = 1
-target-cpu = "native"
 
 [profile.bench]
 lto = true
 codegen-units = 1
-target-cpu = "native"
 debug = true
 
 [lib]

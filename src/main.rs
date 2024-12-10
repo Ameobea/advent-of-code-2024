@@ -8,4 +8,5 @@ fn main() {
   // aoc_2024::day7::solve();
   // aoc_2024::day8::solve();
   aoc_2024::day9::solve();
+  // aoc_2024::day10::solve();
 }

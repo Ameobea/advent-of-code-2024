@@ -1,4 +1,4 @@
-const INPUT: &'static str = include_str!("../inputs/day2.txt");
+pub const INPUT: &'static str = include_str!("../inputs/day2.txt");
 
 fn parse_input() -> Vec<Vec<isize>> {
   INPUT

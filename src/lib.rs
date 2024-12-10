@@ -3,12 +3,16 @@
   array_windows,
   duration_constructors,
   portable_simd,
-  pointer_is_aligned_to
+  pointer_is_aligned_to,
+  const_for
 )]
 
 extern crate cached;
 
+pub mod helpers;
+
 pub mod day1;
+pub mod day10;
 pub mod day2;
 pub mod day3;
 pub mod day4;
