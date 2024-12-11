@@ -6,12 +6,11 @@
 //   - Takes advantage of the fact that free space is always to the right of data in each slot.
 //   - Uses that trick of adding free space to previous span in the case that the first element is
 //     removed
-//   - Makes hacky assumption that we'll never remove data from the middle as that would create free
-//     space in the middle of the span and invalidate the assumptions.
-//
-//     However, this does work out for all inputs tested.
+//   - Uses the fact that data will always be removed from the first element of the vector to make
+//     this possible
 // - SoA for the spans
-// - aligned input vector as well as data vectors for counts + free lists which facilitates:
+// - aligned input vector as well as data vectors for counts, free lists, and minivecs which
+//   facilitates:
 // - SIMD parsing
 //   - de-interleaves sizes + free spaces into separate arrays and writes out with SIMD where
 //     possible
@@ -32,27 +31,39 @@
 //   - allows fully empty chunks at the end to be skipped during checksum computation
 // - `finished_digit_count` bookkeeping
 //   - allows for early exit of the main loop after we've found a stopping place for every char
+// - using smaller int sizes for data which allows more items to be considered by SIMD as well as
+//   reducing memory footprint and potentially reducing cache pressure
+// - avoid storing counts inside the minivec at all.  instead, reference back to main counts vec
+//   - this allows size of minivec to go from 32-16 bytes
+//   - this necessitates a change in a previous opt. instead of setting count to 0 to pop_front, we
+//     need allocate one extra slot in the counts vec and then set the id to that.
+// - SIMD initialization for slot vectors.  Amazing stuff. (this put me back in the lead from
+//   giooschi on the rust discord speed leaderboard)
+// - made `start_span_ix_by_needed_size` `[u16; 10]` instead of `[usize; 10]`
+// - switch `arr.get_unchecked_mut(x..).fill(u16::MAX)` to `for i in x.. { arr[i] = u16::MAX }`
+//   which... caused a 20% improvement on the bot??
+//   - (perhaps in combination with the previous optimization, but I don't think so)
 
 use std::{
   fmt::Display,
-  simd::{cmp::SimdPartialOrd, num::SimdUint, u32x4, u8x16, u8x64},
+  simd::{cmp::SimdPartialOrd, u16x16, u8x16, u8x32, u8x64},
 };
 
 #[cfg(feature = "local")]
 pub const INPUT: &'static [u8] = include_bytes!("../inputs/day9.txt");
 
-fn parse_digit(c: u8) -> u32 { (c - 48) as u32 }
+fn parse_digit(c: u8) -> u8 { c - 48 }
 
 fn parse_input(input: &[u8]) -> Vec<(u32, u32)> {
   let mut it = input[..input.len() - if input.len() % 2 == 0 { 1 } else { 0 }].array_chunks::<2>();
 
   let mut out = Vec::with_capacity(20_002 / 2);
   while let Some(&[size, free]) = it.next() {
-    out.push((parse_digit(size), parse_digit(free)));
+    out.push((parse_digit(size) as _, parse_digit(free) as _));
   }
 
   if let Some(remainder) = it.remainder().get(0) {
-    out.push((parse_digit(*remainder), 0));
+    out.push((parse_digit(*remainder) as _, 0));
   }
 
   out
@@ -62,7 +73,13 @@ fn parse_input(input: &[u8]) -> Vec<(u32, u32)> {
 struct AlignToSixtyFour([u8; 64]);
 
 // adapted from: https://stackoverflow.com/a/60180226/3833068
-fn aligned_vec(n_bytes: usize) -> Vec<u32> {
+fn aligned_vec<T>(n_bytes: usize) -> Vec<T> {
+  assert_eq!(
+    std::mem::size_of::<AlignToSixtyFour>() % std::mem::size_of::<T>(),
+    0,
+    "64 must be divisible by the size of `T` in bytes"
+  );
+
   // Lazy math to ensure we always have enough.
   let n_units = (n_bytes / std::mem::size_of::<AlignToSixtyFour>()) + 1;
 
@@ -76,9 +93,9 @@ fn aligned_vec(n_bytes: usize) -> Vec<u32> {
 
   unsafe {
     Vec::from_raw_parts(
-      ptr as *mut u32,
-      (len_units * std::mem::size_of::<AlignToSixtyFour>()) / std::mem::size_of::<u32>(),
-      (cap_units * std::mem::size_of::<AlignToSixtyFour>()) / std::mem::size_of::<u32>(),
+      ptr as *mut T,
+      (len_units * std::mem::size_of::<AlignToSixtyFour>()) / std::mem::size_of::<T>(),
+      (cap_units * std::mem::size_of::<AlignToSixtyFour>()) / std::mem::size_of::<T>(),
     )
   }
 }
@@ -100,39 +117,148 @@ fn aligned_vec(n_bytes: usize) -> Vec<u32> {
 //   arr
 // }
 
-fn parse_input_p2(input: &[u8]) -> (Vec<u32>, Vec<u32>, Vec<MiniVec>) {
+const MAX_ID: usize = 9_999;
+
+fn parse_input_p2(input: &[u8]) -> (Vec<u8>, Vec<u8>, Vec<MiniVec>) {
   let id_count = if input.len() % 2 == 1 {
     input.len() / 2 + 1
   } else {
     input.len() / 2
   };
 
-  let mut orig_counts: Vec<u32> = aligned_vec(4 * id_count); // Vec::with_capacity(input.len() / 2 + 1);
-  unsafe { orig_counts.set_len(id_count) };
-  let mut empty_spaces: Vec<u32> = aligned_vec(4 * id_count); // Vec::with_capacity(input.len() / 2 + 1);
+  let mut orig_counts: Vec<u8> = aligned_vec(id_count + 1);
+  unsafe { orig_counts.set_len(id_count + 1) };
+  unsafe { *orig_counts.get_unchecked_mut(MAX_ID + 1) = 0 };
+  let mut empty_spaces: Vec<u8> = aligned_vec(id_count);
   unsafe { empty_spaces.set_len(id_count) };
-  let mut slots: Vec<MiniVec> = Vec::with_capacity(id_count);
+  let mut slots: Vec<MiniVec> = aligned_vec(id_count * std::mem::size_of::<MiniVec>()); // Vec::with_capacity(id_count);
   unsafe { slots.set_len(id_count) };
-  // let mut slots: [MiniVec; 10_000] = build_empty_slots();
+  // initialize the memory layout for the minivecs manually using SIMD.
+  //
+  // this sets them all up to have a length of one with a single element corresponding to file index
+  // `i` as the first and only element.
+  unsafe {
+    let data: [u16; 16] = std::mem::transmute([
+      MiniVec {
+        len: 1,
+        elements: [
+          Slot { id: 0 },
+          Slot { id: 0 },
+          Slot { id: 0 },
+          Slot { id: 0 },
+          Slot { id: 0 },
+          Slot { id: 0 },
+        ],
+        padding: 0,
+      },
+      MiniVec {
+        len: 1,
+        elements: [
+          Slot { id: 1 },
+          Slot { id: 0 },
+          Slot { id: 0 },
+          Slot { id: 0 },
+          Slot { id: 0 },
+          Slot { id: 0 },
+        ],
+        padding: 0,
+      },
+    ]);
+    let mut data = u16x16::from_array(data);
+    let to_add: [u16; 16] = std::mem::transmute([
+      MiniVec {
+        len: 0,
+        elements: [
+          Slot { id: 2 },
+          Slot { id: 0 },
+          Slot { id: 0 },
+          Slot { id: 0 },
+          Slot { id: 0 },
+          Slot { id: 0 },
+        ],
+        padding: 0,
+      },
+      MiniVec {
+        len: 0,
+        elements: [
+          Slot { id: 2 },
+          Slot { id: 0 },
+          Slot { id: 0 },
+          Slot { id: 0 },
+          Slot { id: 0 },
+          Slot { id: 0 },
+        ],
+        padding: 0,
+      },
+    ]);
+    assert_eq!(std::mem::size_of::<MiniVec>(), 16);
+    assert_eq!(
+      std::mem::size_of::<MiniVec>() * 2,
+      std::mem::size_of::<u16x16>()
+    );
+    debug_assert_eq!(slots.len() % 2, 0);
+    let to_add = u16x16::from_array(to_add);
 
-  assert!(input.as_ptr().is_aligned_to(std::mem::align_of::<u8x64>()));
+    let start = slots.as_mut_ptr() as *mut u16x16;
+    for chunk_ix in 0..(slots.len() / 2) {
+      let out_ptr = start.add(chunk_ix);
+      out_ptr.write(data);
+      data += to_add;
 
-  const VECTOR_LEN: usize = 16;
+      debug_assert_eq!(&slots[chunk_ix * 2..=chunk_ix * 2 + 1], &[
+        MiniVec {
+          len: 1,
+          elements: [
+            Slot {
+              id: (chunk_ix * 2) as u16
+            },
+            Slot { id: 0 },
+            Slot { id: 0 },
+            Slot { id: 0 },
+            Slot { id: 0 },
+            Slot { id: 0 },
+          ],
+          padding: 0,
+        },
+        MiniVec {
+          len: 1,
+          elements: [
+            Slot {
+              id: (chunk_ix * 2 + 1) as u16
+            },
+            Slot { id: 0 },
+            Slot { id: 0 },
+            Slot { id: 0 },
+            Slot { id: 0 },
+            Slot { id: 0 },
+          ],
+          padding: 0,
+        }
+      ])
+    }
+
+    // for i in 0..id_count {
+    //   slots.get_unchecked_mut(i).len = 1;
+    //   slots.get_unchecked_mut(i).elements[0].id = i as _;
+    // }
+  }
+
+  debug_assert!(input.as_ptr().is_aligned_to(std::mem::align_of::<u8x64>()));
+
+  const VECTOR_LEN: usize = 32;
   const STORE_VECTOR_LEN: usize = VECTOR_LEN / 2;
   let batch_count = input.len() / VECTOR_LEN;
-  let batch_handled_count = batch_count * VECTOR_LEN;
+
   for batch_ix in 0..batch_count {
-    let vec: u8x16 =
+    let vec: u8x32 =
       unsafe { std::ptr::read(input.as_ptr().add(batch_ix * VECTOR_LEN) as *const _) };
     // convert from ascii digits to bytes representing the digit ('0' -> 0)
-    let converted = vec - u8x16::splat(48);
-    // zero-extend u8 -> u32
-    let vu32 = converted.cast::<u32>();
+    let converted = vec - u8x32::splat(48);
     // split out from size,free,size,free to ([size,size], [free,free])
-    let (sizes, frees) = vu32.deinterleave(vu32);
+    let (sizes, frees) = converted.deinterleave(converted);
     // the de-interleave duplicates the results, so keeping only the first half is correct
-    let sizes = sizes.resize::<STORE_VECTOR_LEN>(STORE_VECTOR_LEN as u32);
-    let frees = frees.resize::<STORE_VECTOR_LEN>(STORE_VECTOR_LEN as u32);
+    let sizes = sizes.resize::<STORE_VECTOR_LEN>(STORE_VECTOR_LEN as u8);
+    let frees = frees.resize::<STORE_VECTOR_LEN>(STORE_VECTOR_LEN as u8);
 
     unsafe {
       let frees_ptr = empty_spaces.as_mut_ptr().add(batch_ix * STORE_VECTOR_LEN) as *mut _;
@@ -141,30 +267,11 @@ fn parse_input_p2(input: &[u8]) -> (Vec<u32>, Vec<u32>, Vec<MiniVec>) {
       let orig_counts_ptr = orig_counts.as_mut_ptr().add(batch_ix * STORE_VECTOR_LEN) as *mut _;
       *orig_counts_ptr = sizes;
     }
-
-    let sizes = sizes.as_array();
-    assert_eq!(sizes.len(), STORE_VECTOR_LEN);
-    for i in 0..sizes.len() {
-      let id = (batch_ix * STORE_VECTOR_LEN + i) as u32;
-      unsafe {
-        slots.get_unchecked_mut(batch_ix * STORE_VECTOR_LEN + i).len = 1;
-        slots
-          .get_unchecked_mut(batch_ix * STORE_VECTOR_LEN + i)
-          .elements[0] = Slot {
-          count: sizes[i],
-          id,
-        }
-
-        // this is for the const-initialized minivec version
-        // slots
-        //   .get_unchecked_mut(batch_ix * STORE_VECTOR_LEN + i)
-        //   .elements[0]
-        //   .count = sizes[i];
-      }
-    }
   }
 
-  if input.len() % 2 != 0 {
+  /*
+  if cfg!(feature = "local") && input.len() % 2 != 0 {
+    let batch_handled_count = batch_count * VECTOR_LEN;
     let mut it = input[batch_handled_count..input.len() - if input.len() % 2 == 0 { 1 } else { 0 }]
       .array_chunks::<2>();
 
@@ -174,12 +281,7 @@ fn parse_input_p2(input: &[u8]) -> (Vec<u32>, Vec<u32>, Vec<MiniVec>) {
       let free = parse_digit(free);
 
       unsafe {
-        *empty_spaces.get_unchecked_mut(id) = free as u32;
-        slots.get_unchecked_mut(id).len = 1;
-        slots.get_unchecked_mut(id).elements[0] = Slot {
-          count: size,
-          id: id as _,
-        };
+        *empty_spaces.get_unchecked_mut(id) = free;
         *orig_counts.get_unchecked_mut(id) = size;
       }
       id += 1;
@@ -189,19 +291,14 @@ fn parse_input_p2(input: &[u8]) -> (Vec<u32>, Vec<u32>, Vec<MiniVec>) {
       let size = parse_digit(*remainder);
 
       unsafe {
-        *empty_spaces.get_unchecked_mut(id) = 0 as u32;
-        slots.get_unchecked_mut(id).len = 1;
-        slots.get_unchecked_mut(id).elements[0] = Slot {
-          count: size,
-          id: id as _,
-        };
+        *empty_spaces.get_unchecked_mut(id) = 0;
         *orig_counts.get_unchecked_mut(id) = size;
       }
     }
-  } else {
+  } else if cfg!(feature = "local") {
     assert!(input.len() % VECTOR_LEN == 0);
-    // we'd technically need to handle converting the newline that we parsed as the last character
-    // into a 0 to indicate that there are zero empty slots at the end.
+    // we'd don't need to handle converting the newline that we parsed as the last character into a
+    // 0 to indicate that there are zero empty slots at the end.
     //
     // however, there is no situation where we'd need to move anything into the last slot, so who
     // cares how big the empty space is.
@@ -211,6 +308,7 @@ fn parse_input_p2(input: &[u8]) -> (Vec<u32>, Vec<u32>, Vec<MiniVec>) {
     //   *empty_spaces.get_unchecked_mut(last_id) = 0;
     // }
   }
+   */
 
   (orig_counts, empty_spaces, slots)
 }
@@ -267,16 +365,26 @@ pub fn part1(input: &[u8]) -> usize {
   out
 }
 
-#[derive(Debug, Clone, Copy)]
+#[repr(align(2))]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct Slot {
-  pub id: u32,
-  pub count: u32,
+  pub id: u16,
+  // count is elided here because it can be referred back to in the original counts array, saving
+  // space and work.
 }
 
-#[derive(Clone, Debug)]
+impl Slot {
+  pub fn count(&self, orig_counts: &[u8]) -> u8 {
+    unsafe { *orig_counts.get_unchecked(self.id as usize) }
+  }
+}
+
+#[repr(align(16))]
+#[derive(Clone, Debug, PartialEq)]
 struct MiniVec {
-  pub len: u32,
+  pub len: u16,
   pub elements: [Slot; 6],
+  pub padding: u16,
 }
 
 impl MiniVec {
@@ -298,12 +406,18 @@ impl MiniVec {
     // self.len -= 1;
 
     // we should only ever mutate the vector once
-    debug_assert!(self.elements[0].count != 0);
+    // debug_assert!(self.elements[0].count != 0);
     // this is a nice trick I came up with to accomplish the equivalent
-    self.elements[0].count = 0;
+    self.elements[0].id = MAX_ID as u16 + 1;
   }
 
-  fn as_slice(&self) -> &[Slot] { unsafe { self.elements.get_unchecked(..self.len as usize) } }
+  fn as_slice(&self) -> &[Slot] {
+    // if self.elements[0].id == MAX_ID as u16 + 1 {
+    //   unsafe { self.elements.get_unchecked(1..self.len as usize) }
+    // } else {
+    unsafe { self.elements.get_unchecked(..self.len as usize) }
+    // }
+  }
 }
 
 const ADD_FACTORIAL_LUT: [usize; 11] = [
@@ -321,7 +435,7 @@ const ADD_FACTORIAL_LUT: [usize; 11] = [
 ];
 
 impl Slot {
-  fn checksum(&self, total_prev: usize) -> usize {
+  fn checksum(&self, total_prev: &mut usize, orig_counts: &[u8]) -> usize {
     // naive impl:
     // (0..self.count)
     //   .map(|i| (total_prev + i as usize) * self.id as usize)
@@ -351,42 +465,54 @@ impl Slot {
     // and since count is always [0,9], we can use a tiny LUT for this which makes this whole
     // checksum essentially constant time
 
-    total_prev * self.count as usize * self.id as usize
-      + unsafe { *ADD_FACTORIAL_LUT.get_unchecked(self.count as usize) } * self.id as usize
+    let count = self.count(orig_counts) as usize;
+    let checksum = *total_prev * count * self.id as usize
+      + unsafe { *ADD_FACTORIAL_LUT.get_unchecked(count) } * self.id as usize;
+    *total_prev += count;
+    checksum
   }
 }
 
 pub fn part2(raw_input: &[u8]) -> usize {
-  let (input, mut empty_spaces, mut slots) = parse_input_p2(raw_input);
+  let (counts, mut empty_spaces, mut slots) = parse_input_p2(raw_input);
 
-  fn checksum(slots: &[Slot], empty_space: u32, total_prev: &mut usize) -> usize {
+  fn checksum(
+    slots: &[Slot],
+    empty_space: u8,
+    total_prev: &mut usize,
+    orig_counts: &[u8],
+  ) -> usize {
     let mut sum = 0usize;
     for slot in slots {
-      sum += slot.checksum(*total_prev);
-      *total_prev += slot.count as usize;
+      sum += slot.checksum(total_prev, orig_counts);
     }
     *total_prev += empty_space as usize;
     sum
   }
 
-  let mut start_span_ix_by_needed_size: [usize; 10] = [0; 10];
+  let mut start_span_ix_by_needed_size: [u16; 10] = [0; 10];
   let mut finished_digit_count = 0usize;
   // we keep track of the highest span that still has a value in it.
   //
   // this allows us to skip iterating over fully empty spans at the end when computing the checksum
   let mut max_unmoved_src_id = 0;
-  'outer: for src_id in (0..input.len()).rev() {
-    let src_count = unsafe { *input.get_unchecked(src_id) };
+  'outer: for src_id in (0..=MAX_ID).rev() {
+    let src_count = unsafe { *counts.get_unchecked(src_id) };
 
-    let start_ix = unsafe { *start_span_ix_by_needed_size.get_unchecked(src_count as usize) };
+    let start_ix =
+      unsafe { *start_span_ix_by_needed_size.get_unchecked(src_count as usize) } as usize;
 
     // we can only move elements to the left
     if start_ix >= src_id {
-      if start_ix != usize::MAX {
+      if start_ix != u16::MAX as usize {
         max_unmoved_src_id = max_unmoved_src_id.max(src_id);
         debug_assert!(slots[max_unmoved_src_id + 1..]
           .iter()
-          .all(|s| s.as_slice().is_empty() || s.as_slice().iter().all(|s| s.count == 0)));
+          .all(|s| s.as_slice().is_empty()
+            || s
+              .as_slice()
+              .iter()
+              .all(|s| s.id == 0 || s.count(&counts) == 0)));
 
         finished_digit_count += 1;
         if finished_digit_count == 9 {
@@ -396,41 +522,56 @@ pub fn part2(raw_input: &[u8]) -> usize {
           );
           break;
         }
-        // TODO: finish bigger digits too?
-        unsafe {
-          *start_span_ix_by_needed_size.get_unchecked_mut(src_count as usize) = usize::MAX;
+
+        // mark this finished and all bigger digits too
+
+        // unsafe {
+        //   start_span_ix_by_needed_size
+        //     .get_unchecked_mut(src_count as usize..10)
+        //     .fill(u16::MAX);
+        // }
+
+        // this is faster than above and creates huge diff in the resulting assembly across the
+        // whole binary, although the callsite looks almost identical with a `memset` still getting
+        // generated.
+        //
+        // also, `get_unchecked_mut` generates idential code; bounds checks are elided automatically
+        // somehow
+        for i in src_count as usize..10 {
+          start_span_ix_by_needed_size[i] = u16::MAX;
         }
       }
 
       continue;
     }
 
-    let src_id = src_id as u32;
+    let src_id = src_id as u16;
 
     let start_ptr = unsafe { empty_spaces.as_ptr().add(start_ix) };
     let mut cur_offset = 0usize;
     let mut dst_span_ix = loop {
-      const VEC_SIZE: usize = 4usize;
-      let end_ix = start_ix + cur_offset + VEC_SIZE;
+      const VEC_SIZE: usize = 16usize;
+      // let end_ix = start_ix + cur_offset + VEC_SIZE;
       // same caveat as before.  For a 100% correct implementation for all possible inputs, we'd
       // need to handle manually checking the tail here but I'm leaving that out
       //
       // I could leave this off if I wanted to and it wouldn't be an issue...
-      if end_ix > input.len() - VEC_SIZE {
-        start_span_ix_by_needed_size[src_count as usize] = usize::MAX;
-        finished_digit_count += 1;
-        max_unmoved_src_id = max_unmoved_src_id.max(src_id as usize);
-        continue 'outer;
-      }
+      // if end_ix > input.len() - VEC_SIZE {
+      //   start_span_ix_by_needed_size[src_count as usize] = usize::MAX;
+      //   finished_digit_count += 1;
+      //   max_unmoved_src_id = max_unmoved_src_id.max(src_id as usize);
+      //   continue 'outer;
+      // }
 
-      let empty_spaces_v: u32x4 =
+      let empty_spaces_v: u8x16 =
         unsafe { std::ptr::read_unaligned(start_ptr.add(cur_offset) as *const _) };
-      let mask = empty_spaces_v.simd_ge(u32x4::splat(src_count));
+      debug_assert_eq!(empty_spaces_v.len(), VEC_SIZE);
+      let mask = empty_spaces_v.simd_ge(u8x16::splat(src_count));
       match mask.first_set() {
         Some(i) => {
           let dst_span_ix = start_ix + cur_offset + i;
           if dst_span_ix >= src_id as usize {
-            start_span_ix_by_needed_size[src_count as usize] = usize::MAX;
+            start_span_ix_by_needed_size[src_count as usize] = u16::MAX;
             finished_digit_count += 1;
             max_unmoved_src_id = max_unmoved_src_id.max(src_id as usize);
             continue 'outer;
@@ -445,16 +586,16 @@ pub fn part2(raw_input: &[u8]) -> usize {
     let dst_slots: &mut MiniVec = unsafe { slots.get_unchecked_mut(dst_span_ix) };
     max_unmoved_src_id = max_unmoved_src_id.max(dst_span_ix);
     dst_slots.push(Slot {
-      count: src_count,
+      // count: src_count,
       id: src_id,
     });
     empty_spaces[dst_span_ix] -= src_count;
 
-    if (dst_span_ix as u32) < src_id && empty_spaces[dst_span_ix] < src_count {
+    if dst_span_ix < (src_id as _) && empty_spaces[dst_span_ix] < src_count {
       dst_span_ix += 1;
     }
 
-    start_span_ix_by_needed_size[src_count as usize] = dst_span_ix;
+    start_span_ix_by_needed_size[src_count as usize] = dst_span_ix as u16;
 
     // \/ this code uses the fact that if a span of size `src_count` can't fit before `dst_span_ix`,
     // then no bigger span could either.
@@ -474,18 +615,18 @@ pub fn part2(raw_input: &[u8]) -> usize {
     // the element we're removing is at the first index of the array since any others added to this
     // span will have been put after it
     let src_slots = &mut slots[src_id as usize];
-    debug_assert_eq!(src_slots.elements[0].id, src_id);
+    // debug_assert_eq!(src_slots.elements[0].id, src_id);
     empty_spaces[src_id as usize - 1] += src_count;
     src_slots.pop_front();
   }
 
   let mut out = 0usize;
   let mut total_prev = 0usize;
-  for (slot, &empty_count) in unsafe { slots.get_unchecked(..=max_unmoved_src_id) }
+  for (slot, &empty_count) in slots[..=max_unmoved_src_id]
     .iter()
-    .zip(unsafe { empty_spaces.get_unchecked(..=max_unmoved_src_id) }.iter())
+    .zip(empty_spaces[..=max_unmoved_src_id].iter())
   {
-    out += checksum(slot.as_slice(), empty_count, &mut total_prev);
+    out += checksum(slot.as_slice(), empty_count, &mut total_prev, &counts);
   }
 
   out
