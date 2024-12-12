@@ -14,7 +14,6 @@ pub fn solve() {
 
   let input = parse_input(INPUT);
 
-  // pathfinding::directed::astar::
   let mut dsts_by_src: FxHashMap<(usize, usize), Vec<(usize, usize)>> = FxHashMap::default();
   let mut starting_coords = Vec::new();
   let mut ending_coords = Vec::new();
@@ -58,10 +57,10 @@ pub fn solve() {
         |c| {
           dsts_by_src
             .get(c)
-            .cloned()
+            .map(|v| v.as_slice())
             .unwrap_or_default()
             .into_iter()
-            .map(|c| (c, 1))
+            .map(|c| (*c, 1))
         },
         |_| 1,
         |s| *s == end,
@@ -84,10 +83,10 @@ pub fn solve() {
         |c| {
           dsts_by_src
             .get(c)
-            .cloned()
+            .map(|v| v.as_slice())
             .unwrap_or_default()
             .into_iter()
-            .map(|c| c)
+            .copied()
         },
         |s| *s == end,
       );
@@ -95,5 +94,5 @@ pub fn solve() {
     }
   }
 
-  dbg!(out);
+  println!("Part 2: {out}");
 }

@@ -22,14 +22,6 @@ fn get_multiplier_for_digit_count(digit_count: usize) -> usize {
 }
 
 fn split_middle(v: usize, digit_count: usize) -> (usize, usize) {
-  let mut left = 0usize;
-  let mut right = 0usize;
-
-  // dbg!(v, get_multiplier_for_digit_count(digit_count));
-  // println!(
-  //   "{}",
-  //   v / get_multiplier_for_digit_count(digit_count / 2 + 1)
-  // );
   let lhs_multiplier = get_multiplier_for_digit_count(digit_count / 2 + 1);
   let left = v / lhs_multiplier;
   let right = v - left * lhs_multiplier;
@@ -41,13 +33,6 @@ fn split_middle(v: usize, digit_count: usize) -> (usize, usize) {
 fn split_middle_c() {
   let n = 123456;
   assert_eq!(split_middle(n, digit_count(n)), (123, 456));
-}
-
-enum NumberClass {
-  Zero,
-  One,
-  TwentyTwentyFour,
-  Other(usize),
 }
 
 fn next(val: usize) -> Either<[usize; 1], [usize; 2]> {
@@ -90,12 +75,8 @@ fn next(val: usize) -> Either<[usize; 1], [usize; 2]> {
 pub fn solve() {
   let input = parse_input(INPUT);
 
-  let out = 0usize;
-
-  let mut single_digit_counts = Vec::new();
   let mut stones = input;
   for _ in 0..25 {
-    dbg!(&stones.len());
     stones = stones
       .into_iter()
       .flat_map(|s| {
@@ -104,21 +85,7 @@ pub fn solve() {
           .map_right(|r| r.into_iter())
       })
       .collect();
-
-    let mut sd_counts = [0usize; 10];
-    stones.retain(|&s| {
-      if s < 10 {
-        sd_counts[s] += 1;
-        false
-      } else {
-        true
-      }
-    });
-
-    single_digit_counts.push(sd_counts);
   }
-
-  dbg!(&stones.len(), &single_digit_counts);
 
   let out = stones.len();
   println!("Part 1: {out}");
