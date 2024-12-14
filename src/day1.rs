@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-const INPUT: &'static str = include_str!("../inputs/day1.txt");
+pub const INPUT: &'static str = include_str!("../inputs/day1.txt");
 
 fn parse_input() -> Vec<(usize, usize)> {
   INPUT
