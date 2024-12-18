@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use regex::Regex;
 
 pub const INPUT: &'static str = include_str!("../inputs/day14.txt");
