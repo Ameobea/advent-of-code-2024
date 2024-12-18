@@ -15,5 +15,6 @@ fn main() {
   // aoc_2024::day14::solve();
   // aoc_2024::day15::solve();
   // aoc_2024::day16::solve();
-  aoc_2024::day17::solve();
+  // aoc_2024::day17::solve();
+  aoc_2024::day18::solve();
 }
