@@ -74,6 +74,20 @@ pub fn part1(input: &[u8]) -> usize {
   out
 }
 
+const ADD_FACTORIAL_LUT: [usize; 11] = [
+  0,
+  0,
+  1,
+  2 + 1,
+  3 + 2 + 1,
+  4 + 3 + 2 + 1,
+  5 + 4 + 3 + 2 + 1,
+  6 + 5 + 4 + 3 + 2 + 1,
+  7 + 6 + 5 + 4 + 3 + 2 + 1,
+  8 + 7 + 6 + 5 + 4 + 3 + 2 + 1,
+  9 + 8 + 7 + 6 + 5 + 4 + 3 + 2 + 1,
+];
+
 pub fn part2(input: &[u8]) -> usize {
   let input = parse_input(input);
 
@@ -92,9 +106,35 @@ pub fn part2(input: &[u8]) -> usize {
 
   impl Slot {
     fn checksum(&self, total_prev: usize) -> usize {
-      (0..self.count)
-        .map(|i| (total_prev + i) * self.id)
-        .sum::<usize>()
+      // naive impl:
+      // (0..self.count)
+      //   .map(|i| (total_prev + i as usize) * self.id as usize)
+      //   .sum::<usize>()
+      // So, this condenses down to a sum of the following:
+      //
+      // (total_prev + 0) * id
+      // (total_prev + 1) * id
+      // (total_prev + 2) * id
+      // ...
+      // (total_prev + (count - 1)) * id
+      //
+      // the `total_prev` part can be split out:
+      // total_prev * self.count * id
+      //
+      // leaving that base plus a sum of the following:
+      //
+      // 0 * id
+      // 1 * id
+      // 2 * id
+      // ...
+      // (count - 1) * id
+      //
+      // this reduces to (0 + 1 + 2 + ... + (count - 1)) * id
+      //
+      // and since count is always [0,9], we can use a tiny LUT for this which makes this whole
+      // checksum essentially constant time
+      total_prev * self.count as usize * self.id as usize
+        + unsafe { *ADD_FACTORIAL_LUT.get_unchecked(self.count as usize) } * self.id as usize
     }
   }
 
