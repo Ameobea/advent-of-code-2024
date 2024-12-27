@@ -409,45 +409,37 @@ pub fn part2(raw_input: &[u8]) -> usize {
 
     let start_ptr = unsafe { empty_spaces.as_ptr().add(start_ix) };
     let mut cur_offset = 0usize;
-    // let mut dst_span_ix = loop {
-    //   const VEC_SIZE: usize = 4usize;
-    //   let end_ix = start_ix + cur_offset + VEC_SIZE;
-    //   // same caveat as before.  For a 100% correct implementation for all possible inputs, we'd
-    //   // need to handle manually checking the tail here but I'm leaving that out
-    //   //
-    //   // I could leave this off if I wanted to and it wouldn't be an issue...
-    //   if end_ix > input.len() - VEC_SIZE {
-    //     start_span_ix_by_needed_size[src_count as usize] = usize::MAX;
-    //     // finished_digit_count += 1;
-    //     // max_unmoved_src_id = max_unmoved_src_id.max(src_id as usize);
-    //     continue 'outer;
-    //   }
+    let mut dst_span_ix = loop {
+      const VEC_SIZE: usize = 4usize;
+      let end_ix = start_ix + cur_offset + VEC_SIZE;
+      // same caveat as before.  For a 100% correct implementation for all possible inputs, we'd
+      // need to handle manually checking the tail here but I'm leaving that out
+      //
+      // I could leave this off if I wanted to and it wouldn't be an issue...
+      if end_ix > input.len() - VEC_SIZE {
+        start_span_ix_by_needed_size[src_count as usize] = usize::MAX;
+        // finished_digit_count += 1;
+        // max_unmoved_src_id = max_unmoved_src_id.max(src_id as usize);
+        continue 'outer;
+      }
 
-    //   let empty_spaces_v: u32x4 =
-    //     unsafe { std::ptr::read_unaligned(start_ptr.add(cur_offset) as *const _) };
-    //   let mask = empty_spaces_v.simd_ge(u32x4::splat(src_count));
-    //   match mask.first_set() {
-    //     Some(i) => {
-    //       let dst_span_ix = start_ix + cur_offset + i;
-    //       if dst_span_ix >= src_id as usize {
-    //         start_span_ix_by_needed_size[src_count as usize] = usize::MAX;
-    //         // finished_digit_count += 1;
-    //         // max_unmoved_src_id = max_unmoved_src_id.max(src_id as usize);
-    //         continue 'outer;
-    //       }
-    //       debug_assert!(empty_spaces[dst_span_ix] >= src_count);
-    //       break dst_span_ix;
-    //     },
-    //     None => cur_offset += VEC_SIZE,
-    //   }
-    // };
-
-    let dst_span_ix = empty_spaces[start_ix..src_id as usize]
-      .iter()
-      .position(|&empty_count| empty_count >= src_count)
-      .map(|i| start_ix + i);
-    let Some(mut dst_span_ix) = dst_span_ix else {
-      continue 'outer;
+      let empty_spaces_v: u32x4 =
+        unsafe { std::ptr::read_unaligned(start_ptr.add(cur_offset) as *const _) };
+      let mask = empty_spaces_v.simd_ge(u32x4::splat(src_count));
+      match mask.first_set() {
+        Some(i) => {
+          let dst_span_ix = start_ix + cur_offset + i;
+          if dst_span_ix >= src_id as usize {
+            start_span_ix_by_needed_size[src_count as usize] = usize::MAX;
+            // finished_digit_count += 1;
+            // max_unmoved_src_id = max_unmoved_src_id.max(src_id as usize);
+            continue 'outer;
+          }
+          debug_assert!(empty_spaces[dst_span_ix] >= src_count);
+          break dst_span_ix;
+        },
+        None => cur_offset += VEC_SIZE,
+      }
     };
 
     let dst_slots: &mut MiniVec = unsafe { slots.get_unchecked_mut(dst_span_ix) };
