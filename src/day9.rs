@@ -2,8 +2,6 @@
 
 use std::fmt::Display;
 
-use smallvec::SmallVec;
-
 #[cfg(feature = "local")]
 pub const INPUT: &'static [u8] = include_bytes!("../inputs/day9.txt");
 
@@ -86,7 +84,7 @@ pub fn part2(input: &[u8]) -> usize {
     cur_start_pos += input[i].0 + input[i].1;
   }
 
-  #[derive(Debug)]
+  #[derive(Clone, Copy, Debug)]
   struct Slot {
     pub id: usize,
     pub count: usize,
@@ -98,6 +96,38 @@ pub fn part2(input: &[u8]) -> usize {
         .map(|i| (total_prev + i) * self.id)
         .sum::<usize>()
     }
+  }
+
+  #[derive(Clone, Debug)]
+  struct MiniVec {
+    pub len: u32,
+    pub elements: [Slot; 6],
+  }
+
+  impl MiniVec {
+    fn push(&mut self, item: Slot) {
+      unsafe {
+        *self.elements.get_unchecked_mut(self.len as usize) = item;
+      }
+      self.len += 1;
+      debug_assert!(self.len as usize <= self.elements.len());
+    }
+
+    fn pop_front(&mut self) {
+      for i in 1..self.len {
+        unsafe {
+          *self.elements.get_unchecked_mut(i as usize - 1) = self.elements[i as usize];
+        }
+      }
+      self.len -= 1;
+      return;
+      // we should only ever mutate the vector once
+      debug_assert!(self.elements[0].count != 0);
+      // this is a nice trick I came up with to accomplish the equivalent
+      self.elements[0].count = 0;
+    }
+
+    fn as_slice(&self) -> &[Slot] { unsafe { self.elements.get_unchecked(..self.len as usize) } }
   }
 
   fn checksum(total_prev: &mut usize, slots: &[Slot], empty_space: usize) -> usize {
@@ -112,10 +142,12 @@ pub fn part2(input: &[u8]) -> usize {
     sum
   }
 
-  let mut slots: Vec<SmallVec<[Slot; 4]>> = Vec::with_capacity(input.len());
+  let mut slots: Vec<MiniVec> = Vec::with_capacity(input.len());
+  unsafe { slots.set_len(input.len()) };
   let mut empty_spaces = Vec::with_capacity(input.len());
   for (id, &(count, free)) in input.iter().enumerate() {
-    slots.push(smallvec::smallvec![Slot { id, count }]);
+    slots[id].len = 1;
+    slots[id].elements[0] = Slot { count, id };
     empty_spaces.push(free);
   }
 
@@ -156,22 +188,15 @@ pub fn part2(input: &[u8]) -> usize {
       start_span_ix_by_needed_size[i] = start_span_ix_by_needed_size[i].max(dst_span_ix);
     }
 
-    let mut was_first = false;
     {
       let src_span = &mut slots[src_id];
 
-      if src_span.last().unwrap().id == src_id {
-        src_span.pop();
-      } else if src_span[0].id == src_id {
-        src_span.remove(0);
-        was_first = true
-      }
+      src_span.pop_front();
+
       empty_spaces[src_id] += src_count;
     }
-    if was_first {
-      empty_spaces[src_id] -= src_count;
-      empty_spaces[src_id - 1] += src_count;
-    }
+    empty_spaces[src_id] -= src_count;
+    empty_spaces[src_id - 1] += src_count;
   }
 
   let mut out = 0usize;
