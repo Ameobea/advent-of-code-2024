@@ -30,7 +30,7 @@
 // - constant-time checksumming
 // - `max_unmoved_src_id` accounting
 //   - allows fully empty chunks at the end to be skipped during checksum computation
-// - REVERTED: `finished_digit_count` bookkeeping
+// - `finished_digit_count` bookkeeping
 //   - allows for early exit of the main loop after we've found a stopping place for every char
 
 use std::{
@@ -370,7 +370,7 @@ pub fn part2(raw_input: &[u8]) -> usize {
   }
 
   let mut start_span_ix_by_needed_size: [usize; 10] = [0; 10];
-  // let mut finished_digit_count = 0usize;
+  let mut finished_digit_count = 0usize;
   // we keep track of the highest span that still has a value in it.
   //
   // this allows us to skip iterating over fully empty spans at the end when computing the checksum
@@ -388,14 +388,14 @@ pub fn part2(raw_input: &[u8]) -> usize {
           .iter()
           .all(|s| s.as_slice().is_empty() || s.as_slice().iter().all(|s| s.count == 0)));
 
-        // finished_digit_count += 1;
-        // if finished_digit_count == 9 {
-        //   debug_assert_eq!(
-        //     start_span_ix_by_needed_size[0], 0,
-        //     "there are never zero-size files in the inputs apparently"
-        //   );
-        //   break;
-        // }
+        finished_digit_count += 1;
+        if finished_digit_count == 9 {
+          debug_assert_eq!(
+            start_span_ix_by_needed_size[0], 0,
+            "there are never zero-size files in the inputs apparently"
+          );
+          break;
+        }
         // TODO: finish bigger digits too?
         unsafe {
           *start_span_ix_by_needed_size.get_unchecked_mut(src_count as usize) = usize::MAX;
@@ -418,7 +418,7 @@ pub fn part2(raw_input: &[u8]) -> usize {
       // I could leave this off if I wanted to and it wouldn't be an issue...
       if end_ix > input.len() - VEC_SIZE {
         start_span_ix_by_needed_size[src_count as usize] = usize::MAX;
-        // finished_digit_count += 1;
+        finished_digit_count += 1;
         max_unmoved_src_id = max_unmoved_src_id.max(src_id as usize);
         continue 'outer;
       }
@@ -431,7 +431,7 @@ pub fn part2(raw_input: &[u8]) -> usize {
           let dst_span_ix = start_ix + cur_offset + i;
           if dst_span_ix >= src_id as usize {
             start_span_ix_by_needed_size[src_count as usize] = usize::MAX;
-            // finished_digit_count += 1;
+            finished_digit_count += 1;
             max_unmoved_src_id = max_unmoved_src_id.max(src_id as usize);
             continue 'outer;
           }
