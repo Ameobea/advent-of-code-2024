@@ -28,9 +28,9 @@
 //   - dubious benefit; within a few percent in any case.
 // - target-cpu=znver3
 // - constant-time checksumming
-// - `max_unmoved_src_id` accounting
+// - REVERTED: `max_unmoved_src_id` accounting
 //   - allows fully empty chunks at the end to be skipped during checksum computation
-// - `finished_digit_count` bookkeeping
+// - REVERTED: `finished_digit_count` bookkeeping
 //   - allows for early exit of the main loop after we've found a stopping place for every char
 
 use std::{
@@ -370,11 +370,11 @@ pub fn part2(raw_input: &[u8]) -> usize {
   }
 
   let mut start_span_ix_by_needed_size: [usize; 10] = [0; 10];
-  let mut finished_digit_count = 0usize;
+  // let mut finished_digit_count = 0usize;
   // we keep track of the highest span that still has a value in it.
   //
   // this allows us to skip iterating over fully empty spans at the end when computing the checksum
-  let mut max_unmoved_src_id = 0;
+  // let mut max_unmoved_src_id = 0;
   'outer: for src_id in (0..input.len()).rev() {
     let src_count = unsafe { *input.get_unchecked(src_id) };
 
@@ -383,19 +383,19 @@ pub fn part2(raw_input: &[u8]) -> usize {
     // we can only move elements to the left
     if start_ix >= src_id {
       if start_ix != usize::MAX {
-        max_unmoved_src_id = max_unmoved_src_id.max(src_id);
-        debug_assert!(slots[max_unmoved_src_id + 1..]
-          .iter()
-          .all(|s| s.as_slice().is_empty() || s.as_slice().iter().all(|s| s.count == 0)));
+        // max_unmoved_src_id = max_unmoved_src_id.max(src_id);
+        // debug_assert!(slots[max_unmoved_src_id + 1..]
+        //   .iter()
+        //   .all(|s| s.as_slice().is_empty() || s.as_slice().iter().all(|s| s.count == 0)));
 
-        finished_digit_count += 1;
-        if finished_digit_count == 9 {
-          debug_assert_eq!(
-            start_span_ix_by_needed_size[0], 0,
-            "there are never zero-size files in the inputs apparently"
-          );
-          break;
-        }
+        // finished_digit_count += 1;
+        // if finished_digit_count == 9 {
+        //   debug_assert_eq!(
+        //     start_span_ix_by_needed_size[0], 0,
+        //     "there are never zero-size files in the inputs apparently"
+        //   );
+        //   break;
+        // }
         // TODO: finish bigger digits too?
         unsafe {
           *start_span_ix_by_needed_size.get_unchecked_mut(src_count as usize) = usize::MAX;
@@ -409,41 +409,49 @@ pub fn part2(raw_input: &[u8]) -> usize {
 
     let start_ptr = unsafe { empty_spaces.as_ptr().add(start_ix) };
     let mut cur_offset = 0usize;
-    let mut dst_span_ix = loop {
-      const VEC_SIZE: usize = 4usize;
-      let end_ix = start_ix + cur_offset + VEC_SIZE;
-      // same caveat as before.  For a 100% correct implementation for all possible inputs, we'd
-      // need to handle manually checking the tail here but I'm leaving that out
-      //
-      // I could leave this off if I wanted to and it wouldn't be an issue...
-      if end_ix > input.len() - VEC_SIZE {
-        start_span_ix_by_needed_size[src_count as usize] = usize::MAX;
-        finished_digit_count += 1;
-        max_unmoved_src_id = max_unmoved_src_id.max(src_id as usize);
-        continue 'outer;
-      }
+    // let mut dst_span_ix = loop {
+    //   const VEC_SIZE: usize = 4usize;
+    //   let end_ix = start_ix + cur_offset + VEC_SIZE;
+    //   // same caveat as before.  For a 100% correct implementation for all possible inputs, we'd
+    //   // need to handle manually checking the tail here but I'm leaving that out
+    //   //
+    //   // I could leave this off if I wanted to and it wouldn't be an issue...
+    //   if end_ix > input.len() - VEC_SIZE {
+    //     start_span_ix_by_needed_size[src_count as usize] = usize::MAX;
+    //     // finished_digit_count += 1;
+    //     // max_unmoved_src_id = max_unmoved_src_id.max(src_id as usize);
+    //     continue 'outer;
+    //   }
 
-      let empty_spaces_v: u32x4 =
-        unsafe { std::ptr::read_unaligned(start_ptr.add(cur_offset) as *const _) };
-      let mask = empty_spaces_v.simd_ge(u32x4::splat(src_count));
-      match mask.first_set() {
-        Some(i) => {
-          let dst_span_ix = start_ix + cur_offset + i;
-          if dst_span_ix >= src_id as usize {
-            start_span_ix_by_needed_size[src_count as usize] = usize::MAX;
-            finished_digit_count += 1;
-            max_unmoved_src_id = max_unmoved_src_id.max(src_id as usize);
-            continue 'outer;
-          }
-          debug_assert!(empty_spaces[dst_span_ix] >= src_count);
-          break dst_span_ix;
-        },
-        None => cur_offset += VEC_SIZE,
-      }
+    //   let empty_spaces_v: u32x4 =
+    //     unsafe { std::ptr::read_unaligned(start_ptr.add(cur_offset) as *const _) };
+    //   let mask = empty_spaces_v.simd_ge(u32x4::splat(src_count));
+    //   match mask.first_set() {
+    //     Some(i) => {
+    //       let dst_span_ix = start_ix + cur_offset + i;
+    //       if dst_span_ix >= src_id as usize {
+    //         start_span_ix_by_needed_size[src_count as usize] = usize::MAX;
+    //         // finished_digit_count += 1;
+    //         // max_unmoved_src_id = max_unmoved_src_id.max(src_id as usize);
+    //         continue 'outer;
+    //       }
+    //       debug_assert!(empty_spaces[dst_span_ix] >= src_count);
+    //       break dst_span_ix;
+    //     },
+    //     None => cur_offset += VEC_SIZE,
+    //   }
+    // };
+
+    let dst_span_ix = empty_spaces[start_ix..src_id as usize]
+      .iter()
+      .position(|&empty_count| empty_count >= src_count)
+      .map(|i| start_ix + i);
+    let Some(mut dst_span_ix) = dst_span_ix else {
+      continue 'outer;
     };
 
     let dst_slots: &mut MiniVec = unsafe { slots.get_unchecked_mut(dst_span_ix) };
-    max_unmoved_src_id = max_unmoved_src_id.max(dst_span_ix);
+    // max_unmoved_src_id = max_unmoved_src_id.max(dst_span_ix);
     dst_slots.push(Slot {
       count: src_count,
       id: src_id,
@@ -481,10 +489,16 @@ pub fn part2(raw_input: &[u8]) -> usize {
 
   let mut out = 0usize;
   let mut total_prev = 0usize;
-  for (slot, &empty_count) in unsafe { slots.get_unchecked(..=max_unmoved_src_id) }
-    .iter()
-    .zip(unsafe { empty_spaces.get_unchecked(..=max_unmoved_src_id) }.iter())
-  {
+  for (slot, &empty_count) in unsafe {
+    slots.get_unchecked(.. /* =max_unmoved_src_id */)
+  }
+  .iter()
+  .zip(
+    unsafe {
+      empty_spaces.get_unchecked(.. /* =max_unmoved_src_id */)
+    }
+    .iter(),
+  ) {
     out += checksum(slot.as_slice(), empty_count, &mut total_prev);
   }
 
