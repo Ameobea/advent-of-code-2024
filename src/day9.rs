@@ -89,13 +89,6 @@ impl MiniVec {
   }
 
   fn pop_front(&mut self) {
-    for i in 1..self.len {
-      unsafe {
-        *self.elements.get_unchecked_mut(i as usize - 1) = self.elements[i as usize];
-      }
-    }
-    self.len -= 1;
-    return;
     // we should only ever mutate the vector once
     debug_assert!(self.elements[0].count != 0);
     // this is a nice trick I came up with to accomplish the equivalent
