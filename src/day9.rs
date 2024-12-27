@@ -100,32 +100,23 @@ pub fn part2(input: &[u8]) -> usize {
     }
   }
 
-  #[derive(Debug)]
-  struct Span {
-    slots: SmallVec<[Slot; 4]>,
-    empty_space: usize,
-  }
+  fn checksum(total_prev: &mut usize, slots: &[Slot], empty_space: usize) -> usize {
+    debug_assert!(slots.len() <= 4);
 
-  impl Span {
-    fn checksum(&self, total_prev: &mut usize) -> usize {
-      debug_assert!(self.slots.len() <= 4);
-
-      let mut sum = 0usize;
-      for slot in &self.slots {
-        sum += slot.checksum(*total_prev);
-        *total_prev += slot.count;
-      }
-      *total_prev += self.empty_space;
-      sum
+    let mut sum = 0usize;
+    for slot in slots {
+      sum += slot.checksum(*total_prev);
+      *total_prev += slot.count;
     }
+    *total_prev += empty_space;
+    sum
   }
 
-  let mut spans = Vec::with_capacity(input.len());
+  let mut slots: Vec<SmallVec<[Slot; 4]>> = Vec::with_capacity(input.len());
+  let mut empty_spaces = Vec::with_capacity(input.len());
   for (id, &(count, free)) in input.iter().enumerate() {
-    spans.push(Span {
-      slots: smallvec::smallvec![Slot { id, count }],
-      empty_space: free,
-    });
+    slots.push(smallvec::smallvec![Slot { id, count }]);
+    empty_spaces.push(free);
   }
 
   let mut start_span_ix_by_needed_size: [usize; 10] = [0; 10];
@@ -136,11 +127,11 @@ pub fn part2(input: &[u8]) -> usize {
     if start_ix >= src_id {
       continue;
     }
-    let dst_span_ix = spans[start_ix..src_id]
+    let dst_span_ix = empty_spaces[start_ix..src_id]
       .iter_mut()
       .enumerate()
-      .find_map(|(i, span)| {
-        if span.empty_space >= src_count {
+      .find_map(|(i, &mut empty_space)| {
+        if empty_space >= src_count {
           Some(start_ix + i)
         } else {
           None
@@ -149,17 +140,16 @@ pub fn part2(input: &[u8]) -> usize {
     let Some(mut dst_span_ix) = dst_span_ix else {
       continue;
     };
-    let mut dst_span = &mut spans[dst_span_ix];
+    let dst_span = &mut slots[dst_span_ix];
 
-    dst_span.slots.push(Slot {
+    dst_span.push(Slot {
       count: src_count,
       id: src_id,
     });
-    dst_span.empty_space -= src_count;
+    empty_spaces[dst_span_ix] -= src_count;
 
-    while dst_span.empty_space < src_count {
+    while empty_spaces[dst_span_ix] < src_count {
       dst_span_ix += 1;
-      dst_span = &mut spans[dst_span_ix];
     }
 
     for i in src_count..10 {
@@ -168,31 +158,26 @@ pub fn part2(input: &[u8]) -> usize {
 
     let mut was_first = false;
     {
-      let src_span = &mut spans[src_id];
+      let src_span = &mut slots[src_id];
 
-      if src_span.slots.last().unwrap().id == src_id {
-        src_span.slots.pop();
-      } else if src_span.slots[0].id == src_id {
-        src_span.slots.remove(0);
+      if src_span.last().unwrap().id == src_id {
+        src_span.pop();
+      } else if src_span[0].id == src_id {
+        src_span.remove(0);
         was_first = true
-      } else {
-        debug_assert!(
-          false,
-          "never seen this on an input before, but it might technically be possible..."
-        );
       }
-      src_span.empty_space += src_count;
+      empty_spaces[src_id] += src_count;
     }
     if was_first {
-      spans[src_id].empty_space -= src_count;
-      spans[src_id - 1].empty_space += src_count;
+      empty_spaces[src_id] -= src_count;
+      empty_spaces[src_id - 1] += src_count;
     }
   }
 
   let mut out = 0usize;
   let mut total_prev = 0usize;
-  for span in &spans {
-    out += span.checksum(&mut total_prev);
+  for (i, slot) in slots.iter().enumerate() {
+    out += checksum(&mut total_prev, slot.as_slice(), empty_spaces[i]);
   }
 
   out
